@@ -58,20 +58,20 @@ let k_exec image ~start ~k ~f ~init:u_init =
   Dis.run dis mem ~stop_on:[`May_affect_control_flow] 
     ~return:(fun _ -> return ())
     ~init
-    ~invalid:(fun d mem s -> yield @@ (Invalid_term, s.state))
+    ~invalid:(fun d mem s -> yield (Invalid_term, s.state))
     ~hit:(fun d mem insn s ->
-      if s.k = 0 then yield @@ (K_term, s.state) else
+      if s.k = 0 then yield (K_term, s.state) else
       (* Run the insn sequence *)
       let (s, tgts, fall) = List.fold_right (Dis.insns d) ~f:(exec_insn f) ~init:(s, [], false) in
       (* Decrement the step count *)
       let s = {s with k = s.k - 1} in
-      if s.term then yield @@ (User_term, s.state) else
+      if s.term then yield (User_term, s.state) else
       (* Hit all jump targets *)
-      List.fold_right tgts ~f:(fun tgt m -> m >>= fun _ ->
+      List.fold_left tgts ~f:(fun tgt m -> m >>= fun _ ->
         if AS.mem s.past tgt then return () else
         match get_mem tgt with
           | Some mem -> Dis.jump d mem {s with past = AS.add s.past tgt}
-          | None     -> yield @@ (Unmapped_term, s.state))
+          | None     -> yield (Unmapped_term, s.state))
         ~init:(return ()) >>= fun _ ->
       (* If we're going to fall through, do so *)
       if fall
