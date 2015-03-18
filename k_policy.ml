@@ -1,0 +1,21 @@
+open Core_kernel.Std
+open Bap.Std
+open K_exec
+
+module type POLICY = sig
+  type t
+  val step : t trace_func
+  val init : t
+  val remarkable : t -> bool
+  val render : t -> string
+  val starts : image -> addr Seq.t
+end
+
+module CheckPolicy = functor (P: POLICY) -> struct
+  let check_image k image =
+    Seq.iter (P.starts image) ~f:(fun start ->
+      Seq.iter (k_exec image ~start ~k ~f:P.step ~init:P.init |> Or_error.ok_exn) ~f:(fun (_, v) ->
+        if P.remarkable v
+          then print_endline @@ P.render @@ v
+          else ()))
+end
