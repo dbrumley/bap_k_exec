@@ -3,22 +3,14 @@ open Bap.Std
 open K_policy
 open K_exec
 open Bap_disasm_basic
+module MemSave = Memory
+open Tainteval
+module Memory = MemSave
 
 module Loc = struct
   module T = struct
     type t = Reg of var
            | Mem of addr with sexp, compare
-  end
-  include T
-  include Comparable.Make(T)
-end
-
-module Taint = struct
-  module T = struct
-    type t = (string * int) with sexp
-    let alloc = ref (-1)
-    let fresh name = alloc := !alloc + 1; (name, !alloc)
-    let compare (_, x) (_, y) = compare x y
   end
   include T
   include Comparable.Make(T)
@@ -69,15 +61,7 @@ let elim_taint s loc =
    {s with check = Taint.Map.remove s.check taint}) |>
   value ~default:s
 
-let step_taint s _ = s
-
-let step insn bil tgts (st : t trace_step) =
-  let s' =
-  if (List.mem (Insn.kinds insn) `Call)
-     && (List.exists tgts ~f:(Addr.Set.mem st.state.source_addrs))
-     then new_taint st.state (Loc.Reg Bap_disasm_arm_env.r0) else
-  List.fold_left bil ~f:step_taint ~init:([], st.state) |> snd in
-  {st with state = s'}
+let step addr insn bil (st : t trace_step) = (st, [], false)
 
 let render x = String.concat (List.map x.path ~f:Addr.to_string) ~sep:"->"
 let starts image =

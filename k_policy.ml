@@ -19,12 +19,3 @@ module CheckPolicy = functor (P: POLICY) -> struct
           then print_endline @@ P.render @@ v
           else ()))
 end
-
-module NullPolicy : POLICY = struct
-  type t = unit
-  let step _ _ _ = ident
-  let init _ = ()
-  let remarkable _ = false
-  let render _ = ""
-  let starts _ = Seq.empty
-end

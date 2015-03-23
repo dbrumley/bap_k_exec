@@ -6,7 +6,6 @@ open K_policy
 
 Plugins.load ()
 
-module CheckNull = CheckPolicy(NullPolicy)
 module CheckErr  = CheckPolicy(Err_policy)
 
 let check prog k =

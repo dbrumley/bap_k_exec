@@ -1,35 +1,23 @@
 open Core_kernel.Std
 open Bap.Std
 
-type model = {
-  conc : Conceval.state;
-}
-
-let init_model = {
-  conc = Conceval.State.empty
-}
-
 module AS = Addr.Set
 
 type 'a trace_step = {
-  model : model;
   state : 'a;
   k     : int;
-  past  : AS.t;
   term  : bool;
 }
 
 let init_step k u = {
-  model = init_model;
   state = u;
   k     = k;
-  past  = AS.empty;
   term  = false;
 }
 
 module Dis = Disasm_expert.Basic
 
-type 'a trace_func = Dis.full_insn -> stmt list -> addr list -> 'a trace_step -> 'a trace_step
+type 'a trace_func = addr -> Dis.full_insn -> stmt list -> 'a trace_step -> ('a trace_step * addr list * bool)
 
 let opt_error msg = function
   | None -> Or_error.error_string msg
@@ -49,16 +37,7 @@ let exec_insn f (mem, opt_insn) (s, _, _) =
   let inval_dis_msg = "Invalid disasms terminate. They should not be here." in
   let insn = Option.value_exn ~message:inval_dis_msg opt_insn in
   match Bap_disasm_arm_lifter.insn mem insn with
-   | Ok(bil) ->
-       let (c', next) = Conceval.eval_stmts (s.model.conc) bil in
-       let (tgts, fall) = (match next with
-          | Some(Conceval.BV tgt) -> ([tgt], false)
-          | Some(Conceval.Mem _) -> raise (Abort "memory bank as jump target, invalid lift")
-          | Some(Un(_,_))
-          | None -> ([], true)) in
-       let s' = {s with model = {s.model with conc = c'}} in
-       let s'' = f insn bil tgts s' in
-       (s'', tgts, fall)
+   | Ok(bil) -> f (Memory.min_addr mem) insn bil s
    | Error(_) -> 
        (* This isn't quite right, since it will report user_term *)
        (* I should find a way to make invalid_term happen instead *)
@@ -88,9 +67,8 @@ let k_exec image ~start ~k ~f ~init:u_init =
       if s.term then yield (User_term, s.state) else
       (* Hit all jump targets *)
       List.fold_left tgts ~f:(fun m tgt -> m >>= fun _ ->
-        if AS.mem s.past tgt then return () else
         match get_mem tgt with
-          | Some mem -> Dis.jump d mem {s with past = AS.add s.past tgt}
+          | Some mem -> Dis.jump d mem s
           | None     -> yield (Unmapped_term, s.state))
         ~init:(return ()) >>= fun _ ->
       (* If we're going to fall through, do so *)
