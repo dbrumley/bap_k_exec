@@ -29,7 +29,7 @@ let init_step k u = {
 
 module Dis = Disasm_expert.Basic
 
-type 'a trace_func = Dis.full_insn -> stmt list -> 'a trace_step -> 'a trace_step
+type 'a trace_func = Dis.full_insn -> stmt list -> addr list -> 'a trace_step -> 'a trace_step
 
 let opt_error msg = function
   | None -> Or_error.error_string msg
@@ -57,7 +57,7 @@ let exec_insn f (mem, opt_insn) (s, _, _) =
           | Some(Un(_,_))
           | None -> ([], true)) in
        let s' = {s with model = {s.model with conc = c'}} in
-       let s'' = f insn bil s' in
+       let s'' = f insn bil tgts s' in
        (s'', tgts, fall)
    | Error(_) -> 
        (* This isn't quite right, since it will report user_term *)
