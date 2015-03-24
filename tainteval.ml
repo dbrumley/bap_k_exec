@@ -116,6 +116,16 @@ module State = struct
   (** Remove all temporary variables from a state. *)
   let remove_tmp state =
     StateMap.filter state ~f:(fun ~key:k ~data:_ -> not (Var.is_tmp k))
+
+  let taint s var t =
+    match StateMap.find s var with
+      | Some (BV(v, t0)) -> StateMap.add s var (BV(v, (Taint.Set.union t t0)))
+      | None -> let neg1 = (match Var.typ var with
+                              | Imm sz -> Bitvector.of_int (-1) ~width:sz
+                              | Mem _ -> raise (Abort "Tried to intro tainted memory")) in
+                StateMap.add s var (BV(neg1, t))
+      | Some (Un(x, y, t0)) -> StateMap.add s var (Un(x, y, Taint.Set.union t t0))
+      | Some (Mem _) -> raise (Abort "Tried to taint all of memory")
 end
 
 type state = State.t
