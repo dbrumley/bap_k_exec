@@ -79,7 +79,8 @@ let step addr insn bil (st : t trace_step) =
     (* Skip skipped functions *)
     | Some(tgt) when Addr.Set.mem (s.skip_addrs) @@ to_addr_exn tgt -> ([], [st'])
     (* Follow normal instructions *)
-    | Some(tgt) -> ([st', to_addr_exn tgt], [])
+    | Some(tgt) -> printf "Jump Target: %s\n" (Addr.to_string @@ to_addr_exn tgt);
+                   ([st', to_addr_exn tgt], [])
     | None -> ([], [st']))
 
 let render x =
