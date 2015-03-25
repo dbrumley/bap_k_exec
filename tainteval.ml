@@ -11,6 +11,7 @@ module Taint = struct
     let alloc = ref (-1)
     let fresh name = alloc := !alloc + 1; (name, !alloc)
     let compare (_, x) (_, y) = compare x y
+    let to_string (name,i) = sprintf "%s:%d" name i
   end
   include T
   include Comparable.Make(T)
@@ -32,6 +33,8 @@ module T = struct
   and memory = t Mem.t
   with compare, sexp
 
+  let to_string x = Sexp.to_string (sexp_of_t x)
+  
   let hash = Hashtbl.hash
 
   open Format
@@ -103,14 +106,26 @@ module Memory = struct
     | (_, _, _) -> raise (Abort "Memory, index, or value has wrong type.")
 end
 
+let bv_var var n = match Var.typ var with
+  | Type.Imm sz -> Bitvector.of_int n ~width:sz
+  | Type.Mem _ -> failwith "Tried to create mem bv"
+
 module State = struct
   module StateMap = Var.Map
   type t = T.t StateMap.t
   with compare, sexp
-
+  let to_string x = Sexp.to_string (sexp_of_t x)
+  
   let empty = StateMap.empty
   let move = StateMap.add
-  let peek_exn = StateMap.find_exn
+  let peek_exn s v = 
+    let is_mem = function
+      | Type.Mem(_,_) -> true
+      | _ -> false in
+    match StateMap.find s v with
+      | Some x -> x
+      | None when is_mem (Var.typ v) -> Mem (Mem.empty)
+      | None -> BV (bv_var v 0, Taint.Set.empty)
   let peek = StateMap.find
 
   (** Remove all temporary variables from a state. *)
@@ -120,9 +135,7 @@ module State = struct
   let taint s var t =
     match StateMap.find s var with
       | Some (BV(v, t0)) -> StateMap.add s var (BV(v, (Taint.Set.union t t0)))
-      | None -> let neg1 = (match Var.typ var with
-                              | Imm sz -> Bitvector.of_int (-1) ~width:sz
-                              | Mem _ -> raise (Abort "Tried to intro tainted memory")) in
+      | None -> let neg1 = bv_var var (-1) in
                 StateMap.add s var (BV(neg1, t))
       | Some (Un(x, y, t0)) -> StateMap.add s var (Un(x, y, Taint.Set.union t t0))
       | Some (Mem _) -> raise (Abort "Tried to taint all of memory")
@@ -235,8 +248,8 @@ let rec eval_exp state exp =
 let rec eval_stmt taint_stack state =
   let taint_head = List.hd_exn taint_stack in
   let open Stmt in function
-    | Move (v, exp) -> (State.move ~key:v ~data:(eval_exp state exp) state), None
-    | Jmp (exp) -> state, Some (taint_head, (eval_exp state exp))
+    | Move (v, exp) -> [(State.move ~key:v ~data:(eval_exp state exp) state), None], Taint.Set.empty
+    | Jmp (exp) -> [state, Some(eval_exp state exp)], taint_head
     | While (cond, stmts) ->
       (match eval_exp state cond with
        | Mem _ -> raise (Abort "Operation cannot be performed on memory.")
@@ -244,35 +257,41 @@ let rec eval_stmt taint_stack state =
        | BV (v, t) ->
          let taint_stack' = (Taint.Set.union taint_head t) :: taint_stack in
          if not(Word.is_zero v) then
-           let (state, addr) = (eval_stmt_list taint_stack' state stmts) in
+           let (tgts, ts) = eval_stmt_list taint_stack' state stmts in
+           let tgts' = List.concat @@ List.map tgts ~f:(fun (state, addr) -> 
            (match addr with
-            | None -> eval_stmt taint_stack' state (While (cond, stmts))
-            | Some _ as jump_to -> (state, jump_to))
-         else (state, None))
+            | None -> fst @@ eval_stmt taint_stack' state (While (cond, stmts))
+            | Some _ as jump_to -> [(state, jump_to)])) in
+           (tgts', ts)
+         else [state, None], Taint.Set.empty)
     | If (cond, t_case_stmts, f_case_stmts) ->
       (match eval_exp state cond with
        | Mem _ ->
          raise (Abort "Operation cannot be performed on memory.")
-       | Un (_, _, _) -> raise (Abort "Condition in If statement is Unknown.")
-       | BV (v, t) ->
+       | Un (_, _, t)
+       | BV (_, t) ->
+         printf "Tainted If, taint=%s\n" (String.concat (List.map (Taint.Set.to_list t) ~f:Taint.to_string) ~sep:",");
          let taint_stack' = (Taint.Set.union taint_head t) :: taint_stack in
-         eval_stmt_list taint_stack' state
-                   (if not(Bitvector.is_zero v) then t_case_stmts
-                    else f_case_stmts))
+         let (left_tgts, left_t) = eval_stmt_list taint_stack' state t_case_stmts in
+         let (right_tgts, right_t) = eval_stmt_list taint_stack' state f_case_stmts in
+         printf "Outtaint = %s\n"(String.concat (List.map (Taint.Set.to_list (Taint.Set.union left_t right_t)) ~f:Taint.to_string) ~sep:",");
+         (left_tgts @ right_tgts, Taint.Set.union left_t right_t))
     | Special str ->
       raise (Abort (Printf.sprintf "Aborting with Special '%s'" str))
     | CpuExn i -> raise (Abort (Printf.sprintf "Aborting with CpuExn %d" i))
 (** Helper function:
   * evaluate a list of BIL statements from a starting state. *)
 and eval_stmt_list taint_stack state = function
-  | [] -> state, None
-  | (hd::tl) -> let (state, addr) = eval_stmt taint_stack state hd in
+  | [] -> [state, None], Taint.Set.empty
+  | (hd::tl) -> let (tgts, taint) = eval_stmt taint_stack state hd in
+    List.fold_left (List.map tgts ~f:(fun (state, addr) ->
     (match addr with
      | None -> eval_stmt_list taint_stack state tl
-     | Some _ as jump_to -> (state, jump_to))
+     | Some _ as jump_to -> [(state, jump_to)], taint))) ~f:(fun (tgts, ts) (atgts, ats) ->
+       tgts @ atgts, Taint.Set.union ts ats) ~init:([], Taint.Set.empty)
 
 (** Evaluate a list of instructions and discard temporary state,
   * as when evaluating an assembly instruction. *)
 let eval_stmts state instructions =
-  let (state, addr) = eval_stmt_list [Taint.Set.empty] state instructions in
-  (State.remove_tmp state, addr)
+  let (tgts, ts) = eval_stmt_list [Taint.Set.empty] state instructions in
+  (List.map ~f:(fun (st, tgt) -> (State.remove_tmp st, tgt)) tgts, ts)

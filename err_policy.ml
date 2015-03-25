@@ -46,33 +46,46 @@ let init image = {
   unchecked = Taint.Set.empty;
 }
 
-let remarkable x = not @@ Taint.Set.is_empty x.unchecked
+let remarkable x = true
+(*not @@ Taint.Set.is_empty x.unchecked*)
 
 let to_addr_exn = function
   | Tainteval.BV(x, _) -> x
-  | _ -> failwith "Not an addr"
+  | x -> failwith @@ sprintf "Not an addr %s" @@ Tainteval.to_string x
+
+let ts_to_str x = String.concat (List.map ~f:Taint.to_string (Taint.Set.to_list x)) ~sep:","
 
 let step addr insn bil (st : t trace_step) =
+  printf "Processing addr: %s\nTS: %s\n" (Addr.to_string addr) (ts_to_str st.state.unchecked); 
   let s = {st.state with path = addr::st.state.path} in
-  let (m, otgt) = Tainteval.eval_stmts s.model bil in
-  let s' = {s with model = m} in
+  let (tgts, ts) = Tainteval.eval_stmts s.model bil in
+  printf "Jumptaint: %s\n" (ts_to_str ts);
+  let s' = {s with unchecked = Taint.Set.diff s.unchecked ts} in
+  let merge k = let (l, r) = List.unzip k in (List.concat l, List.concat r) in
+  merge @@ List.map tgts ~f:(fun (m, otgt) ->
+  let s' = {s' with model = m} in
+  let st' = {st with state = s'} in
   let r0 = Bap_disasm_arm_env.r0 in
-  (* If the code takes a jump with a tainted condition, mark checked *)
-  let st' = match otgt with
-    | Some (ct, _) -> let unchecked = Taint.Set.diff s'.unchecked ct in
-      {st with state = {s' with unchecked = unchecked}}
-    | None -> {st with state = s'} in
   match otgt with
+    (* Unknown jump target *)
+    (* TODO, check if insn is return, if so use callgraph for nexts *)
+    | Some(Tainteval.Un(_,_,_)) -> ([], [{st' with term = true}])
     (* Taint and skip tainted functions *)
-    | Some(_,tgt) when Addr.Set.mem (s.source_addrs) @@ to_addr_exn tgt ->
+    | Some(tgt) when Addr.Set.mem (s.source_addrs) @@ to_addr_exn tgt ->
+      print_endline "CREATING TAINT";
       let ts = Taint.Set.singleton (Taint.fresh "any") in
-      ({st with state = {s with model = Tainteval.State.taint s.model r0 ts}}, [], true)
+      ([], [{st' with state = {s with model = Tainteval.State.taint s.model r0 ts;
+                                      unchecked = Taint.Set.union s.unchecked ts}}])
     (* Skip skipped functions *)
-    | Some(_,tgt) when Addr.Set.mem (s.skip_addrs) @@ to_addr_exn tgt -> (st', [], true)
+    | Some(tgt) when Addr.Set.mem (s.skip_addrs) @@ to_addr_exn tgt -> ([], [st'])
     (* Follow normal instructions *)
-    | Some(_,tgt) -> (st', [to_addr_exn tgt], false)
-    | None -> (st', [], true)
+    | Some(tgt) -> ([st', to_addr_exn tgt], [])
+    | None -> ([], [st']))
 
-let render x = String.concat (List.map x.path ~f:Addr.to_string) ~sep:"->"
+let render x =
+  let path = String.concat (List.rev_map x.path ~f:Addr.to_string) ~sep:"->" in
+  let set = String.concat (List.map (Taint.Set.to_list x.unchecked) ~f:Taint.to_string) ~sep:"," in
+  sprintf "Path: %s\nLive taint:%s\n" path set
+
 let starts image =
   sym_pred image ~f:(String.is_prefix ~prefix:"checker")
