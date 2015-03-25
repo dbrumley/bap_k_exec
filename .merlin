@@ -1,0 +1,5 @@
+PKG core_kernel
+PKG bap
+PKG cmdliner
+S .
+B _build

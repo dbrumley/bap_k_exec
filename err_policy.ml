@@ -41,8 +41,8 @@ let image_skips image =
 let init image = {
   path = [];
   source_addrs = image_sources image;
-  skip_addrs = image_skips image;
-  model = Tainteval.State.empty;
+  skip_addrs = Addr.Set.add (image_skips image) @@ Addr.of_int ~width:32 0x82e0;
+  model = Tainteval.State.move (Tainteval.State.of_image image) Bap_disasm_arm_env.sp (Tainteval.BV(Addr.of_int ~width:32 0xbefffc58, Taint.Set.empty));
   unchecked = Taint.Set.empty;
 }
 
@@ -57,7 +57,15 @@ let ts_to_str x = String.concat (List.map ~f:Taint.to_string (Taint.Set.to_list 
 
 let step addr insn bil (st : t trace_step) =
   printf "Processing addr: %s\nTS: %s\n" (Addr.to_string addr) (ts_to_str st.state.unchecked); 
+  (* Advance the PC manually *)
+  let addr_off = Addr.of_int ~width:32 8 in
+  let m' = Tainteval.State.move st.state.model Bap_disasm_arm_env.pc (Tainteval.BV(Addr.(addr + addr_off), Taint.Set.empty)) in
+  let st = {st with state = {st.state with model = m'}} in
+  printf "Step state: %s\n" (Tainteval.State.to_string st.state.model);
   let s = {st.state with path = addr::st.state.path} in
+  printf "Insn: %s\n" (Insn.asm insn);
+  printf "Bil:\t%s\n" (String.concat (List.map bil ~f:Stmt.to_string) ~sep:"\n\t");
+  printf "Bilsexp:\t%s\n" (String.concat (List.map bil ~f:(fun x -> Sexp.to_string @@ Stmt.sexp_of_t x)) ~sep:"\n\t");
   let (tgts, ts) = Tainteval.eval_stmts s.model bil in
   printf "Jumptaint: %s\n" (ts_to_str ts);
   let s' = {s with unchecked = Taint.Set.diff s.unchecked ts} in
@@ -68,7 +76,7 @@ let step addr insn bil (st : t trace_step) =
   let r0 = Bap_disasm_arm_env.r0 in
   match otgt with
     (* Unknown jump target *)
-    (* TODO, check if insn is return, if so use callgraph for nexts *)
+    (* fakdo, check if insn is return, if so use callgraph for nexts *)
     | Some(Tainteval.Un(_,_,_)) -> ([], [{st' with term = true}])
     (* Taint and skip tainted functions *)
     | Some(tgt) when Addr.Set.mem (s.source_addrs) @@ to_addr_exn tgt ->

@@ -1,5 +1,5 @@
 open Core_kernel.Std
-open Bap_types.Std
+open Bap.Std
 
 module Seq = Sequence
 
@@ -34,7 +34,7 @@ module T = struct
   with compare, sexp
 
   let to_string x = Sexp.to_string (sexp_of_t x)
-  
+
   let hash = Hashtbl.hash
 
   open Format
@@ -59,6 +59,10 @@ with compare, sexp
 module Memory = struct
   type t = memory
   let empty = Mem Mem.empty
+  let of_image i =
+    let tbl = Image.words i `r8 in
+    Mem (Table.foldi tbl ~init:Mem.empty ~f:(fun mem v m ->
+        Mem.add m ~key:(Memory.min_addr mem) ~data:(BV(v, Taint.Set.empty))))
   let load ~mem ~idx endianness sz = match mem, idx with
     | (Mem mem, BV (idx, idx_taint)) ->
       if Mem.is_empty mem then None
@@ -112,37 +116,35 @@ let bv_var var n = match Var.typ var with
 
 module State = struct
   module StateMap = Var.Map
-  type t = T.t StateMap.t
-  with compare, sexp
-  let to_string x = Sexp.to_string (sexp_of_t x)
-  
-  let empty = StateMap.empty
-  let move = StateMap.add
-  let peek_exn s v = 
+  type vm = T.t StateMap.t with compare, sexp 
+  type t = (vm * Image.t)
+  let to_string (x, _) = Sexp.to_string (sexp_of_vm x)
+  let of_image i = (StateMap.empty, i) 
+  let move (m, i) var va = (StateMap.add m ~key:var ~data:va, i)
+  let peek_exn (s,i) v = 
     let is_mem = function
       | Type.Mem(_,_) -> true
       | _ -> false in
     match StateMap.find s v with
-      | Some x -> x
-      | None when is_mem (Var.typ v) -> Mem (Mem.empty)
-      | None -> BV (bv_var v 0, Taint.Set.empty)
-  let peek = StateMap.find
+    | Some x -> x
+    | None when is_mem (Var.typ v) -> Memory.of_image i
+    | None -> BV (bv_var v 0, Taint.Set.empty)
+  let peek (s,_) = StateMap.find
 
   (** Remove all temporary variables from a state. *)
-  let remove_tmp state =
-    StateMap.filter state ~f:(fun ~key:k ~data:_ -> not (Var.is_tmp k))
+  let remove_tmp (state,i) =
+    (StateMap.filter state ~f:(fun ~key:k ~data:_ -> not (Var.is_tmp k)), i)
 
-  let taint s var t =
+  let taint (s,i) var t = (
     match StateMap.find s var with
-      | Some (BV(v, t0)) -> StateMap.add s var (BV(v, (Taint.Set.union t t0)))
-      | None -> let neg1 = bv_var var (-1) in
-                StateMap.add s var (BV(neg1, t))
-      | Some (Un(x, y, t0)) -> StateMap.add s var (Un(x, y, Taint.Set.union t t0))
-      | Some (Mem _) -> raise (Abort "Tried to taint all of memory")
+    | Some (BV(v, t0)) -> StateMap.add s var (BV(v, (Taint.Set.union t t0)))
+    | None -> let neg1 = bv_var var (-1) in
+      StateMap.add s var (BV(neg1, t))
+    | Some (Un(x, y, t0)) -> StateMap.add s var (Un(x, y, Taint.Set.union t t0))
+    | Some (Mem _) -> raise (Abort "Tried to taint all of memory")), i
 end
 
 type state = State.t
-with compare, sexp
 
 (** If v is a bitvector, perform some action on it.
   * Otherwise, handle the other value. *)
@@ -225,13 +227,12 @@ let rec eval_exp state exp =
     | Bil.Cast (cast_kind, new_type, v) ->
       handle_cast cast_kind new_type (eval_exp state v)
     | Bil.Let (v, a, b) -> (* FIXME Should there be typechecking done here? *)
-      let state = State.move  state ~key:v ~data:(eval_exp state a) in
+      let state = State.move state v (eval_exp state a) in
       eval_exp state b
     | Bil.Unknown (str, typ) -> Un (str, typ, Taint.Set.empty)
     | Bil.Ite (cond, t_case, f_case) ->
       bv_action_or_unknown (eval_exp state cond)
         (fun v _ ->
-           (* TODO taint ITE properly *)
            let case = if Word.is_zero v then f_case else t_case in
            eval_exp state case)
     | Bil.Extract (hi, lo, v) -> bv_action_or_unknown (eval_exp state v)
@@ -248,7 +249,7 @@ let rec eval_exp state exp =
 let rec eval_stmt taint_stack state =
   let taint_head = List.hd_exn taint_stack in
   let open Stmt in function
-    | Move (v, exp) -> [(State.move ~key:v ~data:(eval_exp state exp) state), None], Taint.Set.empty
+    | Move (v, exp) -> [(State.move state v (eval_exp state exp)), None], Taint.Set.empty
     | Jmp (exp) -> [state, Some(eval_exp state exp)], taint_head
     | While (cond, stmts) ->
       (match eval_exp state cond with
@@ -259,9 +260,9 @@ let rec eval_stmt taint_stack state =
          if not(Word.is_zero v) then
            let (tgts, ts) = eval_stmt_list taint_stack' state stmts in
            let tgts' = List.concat @@ List.map tgts ~f:(fun (state, addr) -> 
-           (match addr with
-            | None -> fst @@ eval_stmt taint_stack' state (While (cond, stmts))
-            | Some _ as jump_to -> [(state, jump_to)])) in
+               (match addr with
+                | None -> fst @@ eval_stmt taint_stack' state (While (cond, stmts))
+                | Some _ as jump_to -> [(state, jump_to)])) in
            (tgts', ts)
          else [state, None], Taint.Set.empty)
     | If (cond, t_case_stmts, f_case_stmts) ->
@@ -285,10 +286,10 @@ and eval_stmt_list taint_stack state = function
   | [] -> [state, None], Taint.Set.empty
   | (hd::tl) -> let (tgts, taint) = eval_stmt taint_stack state hd in
     List.fold_left (List.map tgts ~f:(fun (state, addr) ->
-    (match addr with
-     | None -> eval_stmt_list taint_stack state tl
-     | Some _ as jump_to -> [(state, jump_to)], taint))) ~f:(fun (tgts, ts) (atgts, ats) ->
-       tgts @ atgts, Taint.Set.union ts ats) ~init:([], Taint.Set.empty)
+        (match addr with
+         | None -> eval_stmt_list taint_stack state tl
+         | Some _ as jump_to -> [(state, jump_to)], taint))) ~f:(fun (tgts, ts) (atgts, ats) ->
+        tgts @ atgts, Taint.Set.union ts ats) ~init:([], Taint.Set.empty)
 
 (** Evaluate a list of instructions and discard temporary state,
   * as when evaluating an assembly instruction. *)
