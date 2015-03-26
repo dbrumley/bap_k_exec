@@ -62,7 +62,6 @@ let k_exec image ~start ~k ~f ~init:u_init =
     ~init
     ~invalid:(fun _ mem s -> printf "INVALID: %s\n" (Memory.to_string mem); yield (Invalid_term, s.state))
     ~hit:(fun d _ _ s ->
-      print_endline "HIT ENTRY";
       if s.k = 0 then (print_endline "k=0"; yield (K_term, s.state)) else
       (* Run the insn sequence *)
       let (tgts, falls) = List.fold_left (Dis.insns d) ~f:(exec_insn f) ~init:([], [s]) in

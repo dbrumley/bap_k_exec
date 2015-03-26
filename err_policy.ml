@@ -35,8 +35,14 @@ let image_sources image =
   Seq.fold ~init:Addr.Set.empty ~f:Addr.Set.add
 
 let image_skips image =
-  sym_pred image ~f:(String.is_suffix ~suffix:"printf") |>
-  Seq.fold ~init:Addr.Set.empty ~f:Addr.Set.add
+  let (plt_mem, _) = Seq.find_exn (Memmap.to_sequence (Image.tags image)) ~f:(fun (_, (k, v)) -> (k = "section") && (v = ".plt")) in
+  let min = Memory.min_addr plt_mem in
+  let max = Memory.max_addr plt_mem in
+  printf "PLT detected: %s to %s\n" (Addr.to_string min) (Addr.to_string max);
+  (* Batteries has a -- operator, but I couldn't find one in core, so... *)
+  let rec wat n skips = if n > max then skips else
+    wat Word.(n ++ 1) (Addr.Set.add skips n) in
+  wat min Addr.Set.empty
 
 let init image = {
   path = [];
@@ -61,7 +67,7 @@ let step addr insn bil (st : t trace_step) =
   let addr_off = Addr.of_int ~width:32 8 in
   let m' = Tainteval.State.move st.state.model Bap_disasm_arm_env.pc (Tainteval.BV(Addr.(addr + addr_off), Taint.Set.empty)) in
   let st = {st with state = {st.state with model = m'}} in
-  printf "Step state: %s\n" (Tainteval.State.to_string st.state.model);
+  (*printf "Step state: %s\n" (Tainteval.State.to_string st.state.model); *)
   let s = {st.state with path = addr::st.state.path} in
   printf "Insn: %s\n" (Insn.asm insn);
   printf "Bil:\t%s\n" (String.concat (List.map bil ~f:Stmt.to_string) ~sep:"\n\t");
