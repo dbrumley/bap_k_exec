@@ -112,7 +112,6 @@ module Memory = struct
       done;
       Mem !ret
     | (Mem mem, Un (_, _, _), _) ->
-      print_endline "Warning: writing to unknown memory index";
       Mem mem
     | (_, _, _) -> raise (Abort "Memory, index, or value has wrong type.")
 end
@@ -281,12 +280,9 @@ let rec eval_stmt taint_stack state =
          raise (Abort "Operation cannot be performed on memory.")
        | Un (_, _, t) -> f @@ BV(Addr.of_int ~width:1 1, t)
        | BV (cond, t) ->
-         printf "Tainted If, taint=%s\n" (String.concat (List.map (Taint.Set.to_list t) ~f:Taint.to_string) ~sep:",");
          let taint_stack' = (Taint.Set.union taint_head t) :: taint_stack in
          let (left_tgts, left_t) = eval_stmt_list taint_stack' state t_case_stmts in
          let (right_tgts, right_t) = eval_stmt_list taint_stack' state f_case_stmts in
-         printf "Outtaint = %s\n"(String.concat (List.map (Taint.Set.to_list (Taint.Set.union left_t right_t)) ~f:Taint.to_string) ~sep:",");
-         let double_taint = Taint.Set.union left_t right_t in
          if not @@ List.exists (left_tgts @ right_tgts) ~f:(fun (_, x) -> Option.is_some x)
            (* If this is not a control flow, take only one branch *)
            then if Word.is_zero cond

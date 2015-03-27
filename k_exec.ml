@@ -69,26 +69,22 @@ let k_exec image ~start ~k ~f ~init:u_init =
     ~init
     ~invalid:(fun _ mem s -> printf "INVALID: %s\n" (Memory.to_string mem); yield (Invalid_term, s.state))
     ~hit:(fun d mem _ s ->
-      if s.k = 0 then (print_endline "k=0"; yield (K_term, s.state)) else
+      if s.k = 0 then yield (K_term, s.state) else
       (* Run the insn sequence *)
       let (tgts, falls) = List.fold_left (Dis.insns d) ~f:(exec_insn f) ~init:([], [s]) in
-      printf "Tgt count: %d\nFall count: %d\n" (List.length tgts) (List.length falls);
       (* Decrement the step count *)
       let (tgts, falls) = List.map tgts ~f:(fun (s, dst) -> {s with k = s.k - 1}, dst),
                           List.map falls ~f:(fun s -> {s with k = s.k - 1}) in 
       (* If we're going to fall through, do so *)
       List.fold_left falls ~f:(fun m s -> m >>= fun _ ->
         if s.term then yield (User_term, s.state) else
-        (printf "I am about to fall through from %s\n" (Addr.to_string (Memory.min_addr mem));
-         Dis.step d s)) ~init:(return ()) >>= fun _ -> 
+        Dis.step d s) ~init:(return ()) >>= fun _ -> 
       (* Hit all jump targets *)
       List.fold_left tgts ~f:(fun m (s, dst) -> m >>= fun _ ->
-        printf "k_exec addr: %s\n" (Addr.to_string dst);
         if s.term then yield (User_term, s.state) else
         match get_mem dst with
           | Some mem -> Dis.jump d mem s
-          | None     -> print_endline "missed";
-                        yield (Unmapped_term, s.state))
+          | None     -> yield (Unmapped_term, s.state))
         ~init:(return ())
     )
     ~stopped:(fun _ s -> print_endline "STOPPED"; yield @@ (Early_term, s.state)) |> run |> Or_error.return
