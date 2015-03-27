@@ -61,8 +61,7 @@ let init image = {
   unchecked = Taint.Set.empty;
 }
 
-let remarkable x = true
-(*not @@ Taint.Set.is_empty x.unchecked*)
+let remarkable x = not @@ Taint.Set.is_empty x.unchecked
 
 let to_addr_exn = function
   | Tainteval.BV(x, _) -> x
@@ -96,7 +95,8 @@ let step addr insn bil (st : t trace_step) =
     (* Taint and skip tainted functions *)
     | Some(tgt) when Addr.Set.mem (s.source_addrs) @@ to_addr_exn tgt ->
       print_endline "CREATING TAINT";
-      let ts = Taint.Set.singleton (Taint.fresh "any") in
+      let name = Option.value ~default:"unk" @@ Option.map ~f:snd @@ Table.find_addr !ida_syms @@ to_addr_exn tgt in
+      let ts = Taint.Set.singleton (Taint.fresh @@ sprintf "%s:%s" name (Addr.to_string addr)) in
       ([], [{st' with state = {s with model = Tainteval.State.taint s.model r0 ts;
                                       unchecked = Taint.Set.union s.unchecked ts}}])
     (* Skip skipped functions *)
@@ -111,5 +111,5 @@ let render x =
   let set = String.concat (List.map (Taint.Set.to_list x.unchecked) ~f:Taint.to_string) ~sep:"," in
   sprintf "Path: %s\nLive taint:%s\n" path set
 
-let starts image = Seq.singleton (Addr.of_int ~width:32 0x12F60)
+let starts image = Seq.singleton (Addr.of_int ~width:32 0x13ad4)
 (*  sym_pred image ~f:(String.is_prefix ~prefix:"checker") *)

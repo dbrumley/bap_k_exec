@@ -31,6 +31,13 @@ type term_cond =
   | K_term
   | Unmapped_term
 
+let term_to_string = function
+  | Invalid_term -> "Invalid"
+  | User_term -> "User"
+  | Early_term -> "Early"
+  | K_term -> "K"
+  | Unmapped_term -> "Unmapped"
+
 exception Abort of string
 
 

@@ -12,10 +12,11 @@ module type POLICY = sig
 end
 
 module CheckPolicy = functor (P: POLICY) -> struct
-  let check_image k image =
-    Seq.iter (P.starts image) ~f:(fun start ->
-      Seq.iter (k_exec image ~start ~k ~f:P.step ~init:(P.init image) |> Or_error.ok_exn) ~f:(fun (_, v) ->
-        if P.remarkable v
-          then print_endline @@ P.render @@ v
-          else ()))
+  let check_image k image out =
+    Out_channel.with_file out ~f:(fun oc ->
+      Seq.iter (P.starts image) ~f:(fun start ->
+        Seq.iter (k_exec image ~start ~k ~f:P.step ~init:(P.init image) |> Or_error.ok_exn) ~f:(fun (m, v) ->
+          if P.remarkable v
+            then (Out_channel.output_string oc @@ P.render @@ v; Out_channel.output_string oc @@ K_exec.term_to_string m)
+            else ())))
 end
