@@ -61,7 +61,12 @@ let init image = {
   unchecked = Taint.Set.empty;
 }
 
-let remarkable x = not @@ Taint.Set.is_empty x.unchecked
+let remarkable x =
+  (* First check the taintset has elements, because this is slow... *)
+  if not @@ Taint.Set.is_empty x.unchecked
+  then let taint' = Taint.Set.diff x.unchecked (Tainteval.State.taints x.model) in
+       not @@ Taint.Set.is_empty taint'
+  else false
 
 let to_addr_exn = function
   | Tainteval.BV(x, _) -> x

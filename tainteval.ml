@@ -33,6 +33,13 @@ module T = struct
   and memory = t Mem.t
   with compare, sexp
 
+  let rec taints = function
+    | BV (_, t) -> t
+    | Un (_, _, t) -> t
+    | Mem (mem) ->
+       Mem.fold mem ~init:Taint.Set.empty ~f:(fun ~key:_ ~data:v s ->
+         Taint.Set.union s (taints v)
+       )
   let to_string x = Sexp.to_string (sexp_of_t x)
 
   let hash = Hashtbl.hash
@@ -142,6 +149,8 @@ module State = struct
       StateMap.add s var (BV(neg1, t))
     | Some (Un(x, y, t0)) -> StateMap.add s var (Un(x, y, Taint.Set.union t t0))
     | Some (Mem _) -> raise (Abort "Tried to taint all of memory")), i
+  let taints (s,_) =
+    StateMap.fold s ~init:Taint.Set.empty ~f:(fun ~key:_ ~data:v s -> Taint.Set.union (T.taints v) s)
 end
 
 type state = State.t
