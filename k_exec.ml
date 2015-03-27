@@ -5,12 +5,14 @@ module AS = Addr.Set
 
 type 'a trace_step = {
   state : 'a;
+  addrs : AS.t;
   k     : int;
   term  : bool;
 }
 
 let init_step k u = {
   state = u;
+  addrs = AS.empty;
   k     = k;
   term  = false;
 }
@@ -69,7 +71,9 @@ let k_exec image ~start ~k ~f ~init:u_init =
     ~init
     ~invalid:(fun _ mem s -> printf "INVALID: %s\n" (Memory.to_string mem); yield (Invalid_term, s.state))
     ~hit:(fun d mem _ s ->
-      if s.k = 0 then yield (K_term, s.state) else
+      let addr = Memory.min_addr mem in
+      if s.k = 0 || AS.mem s.addrs addr then yield (K_term, s.state) else
+      let s = {s with addrs = AS.add s.addrs addr} in
       (* Run the insn sequence *)
       let (tgts, falls) = List.fold_left (Dis.insns d) ~f:(exec_insn f) ~init:([], [s]) in
       (* Decrement the step count *)

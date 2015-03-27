@@ -58,11 +58,12 @@ let init image = {
   unchecked = Taint.Set.empty;
 }
 
+let impossible x = Taint.Set.diff x.unchecked (Tainteval.State.taints x.model)
+
 let remarkable x =
   (* First check the taintset has elements, because this is slow... *)
   if not @@ Taint.Set.is_empty x.unchecked
-  then let taint' = Taint.Set.diff x.unchecked (Tainteval.State.taints x.model) in
-       not @@ Taint.Set.is_empty taint'
+  then not @@ Taint.Set.is_empty (impossible x)
   else false
 
 let to_addr_exn = function
@@ -103,7 +104,8 @@ let step addr insn bil (st : t trace_step) =
 let render x =
   let path = String.concat (List.rev_map x.path ~f:Addr.to_string) ~sep:"->" in
   let set = String.concat (List.map (Taint.Set.to_list x.unchecked) ~f:Taint.to_string) ~sep:"," in
-  sprintf "Path: %s\nLive taint:%s\n" path set
+  let impossible = String.concat (List.map (Taint.Set.to_list (impossible x)) ~f:Taint.to_string) ~sep:"," in
+  sprintf "Path: %s\nLive taint: %s\nImpossible taint: %s\n" path set impossible
 
 let starts image =
   let skips = image_skips image in
