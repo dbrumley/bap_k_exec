@@ -8,10 +8,17 @@ Plugins.load ()
 
 module CheckErr  = CheckPolicy(Err_policy)
 
-let check prog k =
-  print_endline prog;
+let check prog k err_funcs =
+  Err_policy.load err_funcs;
   let open Or_error in
   Image.create prog >>= fun (image, _) ->
+  Ida.(with_file ~ida:"idal" prog (fun ida ->
+    Table.iteri (Image.sections image) ~f:(fun mem s ->
+      if Section.is_executable s
+        then Table.iteri (get_symbols ~demangle:`internal ida (Image.arch image) mem) ~f:(fun mem sym ->
+          printf "IDA sym: %s %s\n" (Addr.to_string (Memory.min_addr mem)) sym;
+          Err_policy.ida_syms := Table.add !Err_policy.ida_syms mem sym |> ok_exn)
+  ))) >>= fun _ ->
   return @@ CheckErr.check_image k image
 
 let prog =
@@ -22,7 +29,11 @@ let k =
   let doc = "Execute forwards $(docv) blocks" in
   Arg.(value & opt int 10 & info ["k"] ~docv:"K" ~doc)
 
-let check_t = Term.(pure check $ prog $ k)
+let err_funcs =
+  let doc = "Read list of error generating functions from $(docv)" in
+  Arg.(value & pos 1 string "err_funcs" & info [] ~docv:"ERR_FUNCS" ~doc)
+
+let check_t = Term.(pure check $ prog $ k $ err_funcs)
 
 let info =
   let doc = "Analyze a program with k-step concretization" in

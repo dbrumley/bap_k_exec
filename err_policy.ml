@@ -15,6 +15,12 @@ end
 
 module Taint = Tainteval.Taint
 
+let err_funcs = ref String.Set.empty
+
+let load filename =
+  err_funcs := String.Set.of_list @@ In_channel.read_lines filename;
+  String.Set.iter !err_funcs ~f:(fun n -> printf "Error function: %s\n" n)
+
 type t = {
   path : addr list;
   source_addrs : Addr.Set.t;
@@ -23,15 +29,18 @@ type t = {
   unchecked : Taint.Set.t;
 }
 
+let ida_syms = ref Table.empty
+
 let sym_pred image ~f =
-  Image.symbols image |>
-  Table.map ~f:Symbol.name |>
+  !ida_syms |>
   Table.filter ~f |>
   Table.to_sequence |>
   Seq.map ~f:(fun (m,_) -> Memory.min_addr m)
 
 let image_sources image =
-  sym_pred image ~f:(String.is_suffix ~suffix:"error") |>
+  sym_pred image ~f:(String.Set.mem !err_funcs) |>
+  Seq.iter ~f:(fun a -> printf "Taint source: %s\n" (Addr.to_string a));
+  sym_pred image ~f:(String.Set.mem !err_funcs) |>
   Seq.fold ~init:Addr.Set.empty ~f:Addr.Set.add
 
 let image_skips image =
@@ -47,7 +56,7 @@ let image_skips image =
 let init image = {
   path = [];
   source_addrs = image_sources image;
-  skip_addrs = Addr.Set.add (image_skips image) @@ Addr.of_int ~width:32 0x82e0;
+  skip_addrs = image_skips image;
   model = Tainteval.State.move (Tainteval.State.of_image image) Bap_disasm_arm_env.sp (Tainteval.BV(Addr.of_int ~width:32 0xbefffc58, Taint.Set.empty));
   unchecked = Taint.Set.empty;
 }
@@ -102,5 +111,5 @@ let render x =
   let set = String.concat (List.map (Taint.Set.to_list x.unchecked) ~f:Taint.to_string) ~sep:"," in
   sprintf "Path: %s\nLive taint:%s\n" path set
 
-let starts image =
-  sym_pred image ~f:(String.is_prefix ~prefix:"checker")
+let starts image = Seq.singleton (Addr.of_int ~width:32 0x12F60)
+(*  sym_pred image ~f:(String.is_prefix ~prefix:"checker") *)
