@@ -269,14 +269,21 @@ let rec eval_stmt taint_stack state =
       (match eval_exp state cond with
        | Mem _ ->
          raise (Abort "Operation cannot be performed on memory.")
-       | Un (_, _, t)
-       | BV (_, t) ->
+       | Un (_, _, t) -> failwith "Conditioned on un"
+       | BV (cond, t) ->
          printf "Tainted If, taint=%s\n" (String.concat (List.map (Taint.Set.to_list t) ~f:Taint.to_string) ~sep:",");
          let taint_stack' = (Taint.Set.union taint_head t) :: taint_stack in
          let (left_tgts, left_t) = eval_stmt_list taint_stack' state t_case_stmts in
          let (right_tgts, right_t) = eval_stmt_list taint_stack' state f_case_stmts in
          printf "Outtaint = %s\n"(String.concat (List.map (Taint.Set.to_list (Taint.Set.union left_t right_t)) ~f:Taint.to_string) ~sep:",");
-         (left_tgts @ right_tgts, Taint.Set.union left_t right_t))
+         let double_taint = Taint.Set.union left_t right_t in
+         if Taint.Set.is_empty double_taint
+           (* If this is not a control flow, take only one branch *)
+           then if Word.is_zero cond
+                then (right_tgts, right_t)
+                else (left_tgts, left_t)
+           (* If this is control flow, take both *)
+           else (left_tgts @ right_tgts, Taint.Set.union left_t right_t))
     | Special str ->
       raise (Abort (Printf.sprintf "Aborting with Special '%s'" str))
     | CpuExn i -> raise (Abort (Printf.sprintf "Aborting with CpuExn %d" i))
